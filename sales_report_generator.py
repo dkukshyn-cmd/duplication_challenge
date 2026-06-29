@@ -133,6 +133,49 @@ class AdvancedSalesReportGenerator:
             self.logger.error(f"Failed to load data: {str(e)}")
             raise
     
+    def generate_three_month_sales_forecast(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate a simple 3-month sales forecast from historical monthly revenue.
+        
+        The forecast uses recent month-over-month growth when enough history exists,
+        then projects total sales for the next three calendar months.
+        """
+        monthly_sales = (
+            data.set_index('date')
+            .resample('ME')['sales_amount']
+            .sum()
+            .sort_index()
+        )
+        
+        if monthly_sales.empty:
+            return pd.DataFrame(columns=['month', 'forecast_sales_amount'])
+        
+        if len(monthly_sales) >= 4:
+            recent_growth = monthly_sales.pct_change().replace([np.inf, -np.inf], np.nan).dropna().tail(3)
+            average_growth_rate = recent_growth.mean() if not recent_growth.empty else 0
+        elif len(monthly_sales) >= 2:
+            recent_growth = monthly_sales.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+            average_growth_rate = recent_growth.mean() if not recent_growth.empty else 0
+        else:
+            average_growth_rate = 0
+        
+        if pd.isna(average_growth_rate):
+            average_growth_rate = 0
+        
+        forecast_rows = []
+        last_month = monthly_sales.index.max()
+        projected_sales = float(monthly_sales.iloc[-1])
+        
+        for month_offset in range(1, 4):
+            forecast_month = last_month + pd.DateOffset(months=month_offset)
+            projected_sales = max(projected_sales * (1 + average_growth_rate), 0)
+            forecast_rows.append({
+                'month': forecast_month.strftime('%Y-%m'),
+                'forecast_sales_amount': round(projected_sales, 2)
+            })
+        
+        return pd.DataFrame(forecast_rows)
+    
     def generate_comprehensive_sales_report(self, output_path: str, **kwargs) -> str:
         """
         Generate comprehensive sales analytics report with advanced statistical modeling.
@@ -506,12 +549,12 @@ class AdvancedSalesReportGenerator:
             seasonal_components = {}
             
             # Monthly seasonality
-            monthly_means = time_series_data.groupby(time_series_data.dt.month).mean()
+            monthly_means = time_series_data.groupby(time_series_data.index.month).mean()
             overall_mean = time_series_data.mean()
             seasonal_components['monthly_factors'] = (monthly_means / overall_mean).to_dict()
             
             # Quarterly seasonality
-            quarterly_means = time_series_data.groupby(time_series_data.dt.quarter).mean()
+            quarterly_means = time_series_data.groupby(time_series_data.index.quarter).mean()
             seasonal_components['quarterly_factors'] = (quarterly_means / overall_mean).to_dict()
             
             return seasonal_components
@@ -566,6 +609,7 @@ class AdvancedSalesReportGenerator:
             return clv_components
         
         advanced_clv_analysis = calculate_advanced_clv(df)
+        three_month_forecast = self.generate_three_month_sales_forecast(df)
         
         self.analysis_state['phase3_completed'] = True
         self.logger.info("Phase 3 completed: Statistical modeling and predictive analytics")
@@ -751,6 +795,18 @@ class AdvancedSalesReportGenerator:
         
         report_content.append("")
         
+        # 3-month sales forecast
+        report_content.append("3-MONTH SALES FORECAST")
+        report_content.append("-" * 40)
+        if three_month_forecast.empty:
+            report_content.append("Forecast unavailable: no monthly sales history found.")
+        else:
+            for _, forecast_row in three_month_forecast.iterrows():
+                report_content.append(
+                    f"{forecast_row['month']}: ${forecast_row['forecast_sales_amount']:,.2f}"
+                )
+        report_content.append("")
+        
         # Technical Analysis Summary
         report_content.append("TECHNICAL ANALYSIS SUMMARY")
         report_content.append("-" * 40)
@@ -773,7 +829,8 @@ class AdvancedSalesReportGenerator:
             'efficiency_metrics': efficiency_metrics,
             'correlation_matrix': correlation_matrix,
             'seasonality_analysis': seasonality_analysis,
-            'advanced_clv_analysis': advanced_clv_analysis
+            'advanced_clv_analysis': advanced_clv_analysis,
+            'three_month_forecast': three_month_forecast
         }
         
         self.analysis_state['phase4_completed'] = True
